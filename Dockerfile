@@ -3,9 +3,14 @@ FROM docker.io/ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DEBIAN_PRIORITY=high
 
-RUN apt-get update && \
+# Add apt configuration to disable pipelining and caching
+RUN echo 'Acquire::http::Pipeline-Depth "0";\nAcquire::http::No-Cache "true";\nAcquire::http::No-Store "true";' \
+    > /etc/apt/apt.conf.d/99fixbadhash
+
+RUN apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    apt-get update && \
     apt-get -y upgrade && \
-    apt-get -y install \
+    apt-get -y install --fix-missing \
     # UI Requirements
     xvfb \
     xterm \

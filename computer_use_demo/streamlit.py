@@ -13,6 +13,7 @@ from enum import StrEnum
 from functools import partial
 from pathlib import PosixPath
 from typing import cast
+import json
 
 import httpx
 import streamlit as st
@@ -105,7 +106,6 @@ async def main():
     setup_state()
 
     st.markdown(STREAMLIT_STYLE, unsafe_allow_html=True)
-
     st.title("Claude Computer Use Demo")
 
     if not os.getenv("HIDE_WARNING", False):
@@ -158,7 +158,6 @@ async def main():
             with st.spinner("Resetting..."):
                 st.session_state.clear()
                 setup_state()
-
                 subprocess.run("pkill Xvfb; pkill tint2", shell=True)  # noqa: ASYNC221
                 await asyncio.sleep(1)
                 subprocess.run("./start_all.sh", shell=True)  # noqa: ASYNC221
@@ -174,8 +173,11 @@ async def main():
 
     chat, http_logs = st.tabs(["Chat", "HTTP Exchange Logs"])
     new_message = st.chat_input(
-        "Type a message to send to Claude to control the computer..."
+        "Type a message to send to Claude to control the computer (plain text or JSON list of messages)..."
     )
+
+    # Initialize debug_log in a place that is always available.
+    debug_log = st.sidebar.empty()
 
     with chat:
         # render past chats
@@ -186,7 +188,7 @@ async def main():
                 for block in message["content"]:
                     # the tool result we send back to the Anthropic API isn't sufficient to render all details,
                     # so we store the tool use responses
-                    if isinstance(block, dict) and block["type"] == "tool_result":
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
                         _render_message(
                             Sender.TOOL, st.session_state.tools[block["tool_use_id"]]
                         )
@@ -200,30 +202,63 @@ async def main():
         for identity, (request, response) in st.session_state.responses.items():
             _render_api_response(request, response, identity, http_logs)
 
-        # render past chats
+        # handle new message input: try parsing as JSON first
         if new_message:
-            st.session_state.messages.append(
-                {
-                    "role": Sender.USER,
-                    "content": [
-                        *maybe_add_interruption_blocks(),
-                        BetaTextBlockParam(type="text", text=new_message),
-                    ],
-                }
-            )
-            _render_message(Sender.USER, new_message)
+            try:
+                parsed = json.loads(new_message)
+                # If the parsed data is a dict, wrap it in a list.
+                if isinstance(parsed, dict):
+                    parsed = [parsed]
+                if isinstance(parsed, list):
+                    for msg in parsed:
+                        if not isinstance(msg, dict):
+                            raise ValueError("Each message must be a JSON object")
+                        if "role" not in msg:
+                            raise ValueError(
+                                "Each message object must include a 'role' field"
+                            )
+                        # Convert the role to a Sender for consistency if needed.
+                        role = Sender(msg["role"].lower())
+                        pretty_msg = json.dumps(msg, indent=2)
+                        st.session_state.messages.append(
+                            {
+                                "role": role,
+                                "content": [
+                                    BetaTextBlockParam(type="text", text=msg["content"])
+                                ],
+                            }
+                        )
+                        _render_message(
+                            role, BetaTextBlockParam(type="text", text=pretty_msg)
+                        )
+                else:
+                    raise ValueError("JSON input must be a list of message objects")
+            except json.JSONDecodeError:
+                st.session_state.messages.append(
+                    {
+                        "role": Sender.USER,
+                        "content": [
+                            *maybe_add_interruption_blocks(),
+                            BetaTextBlockParam(type="text", text=new_message),
+                        ],
+                    }
+                )
+                _render_message(
+                    Sender.USER, BetaTextBlockParam(type="text", text=new_message)
+                )
+            except Exception as e:
+                st.error(f"Failed to parse JSON input: {e}")
+                return
 
         try:
             most_recent_message = st.session_state["messages"][-1]
         except IndexError:
             return
 
-        if most_recent_message["role"] is not Sender.USER:
-            # we don't have a user message to respond to, exit early
+        if most_recent_message["role"] != Sender.USER:
             return
 
         with track_sampling_loop():
-            # run the agent sampling loop with the newest message
             st.session_state.messages = await sampling_loop(
                 system_prompt_suffix=st.session_state.custom_system_prompt,
                 model=st.session_state.model,
