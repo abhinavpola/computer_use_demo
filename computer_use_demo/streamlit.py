@@ -100,6 +100,13 @@ def _reset_model():
         cast(APIProvider, st.session_state.provider)
     ]
 
+def log_debug(msg: str):
+    """Helper to append a new debug message and update the sidebar container."""
+    st.session_state.debug_log_messages.append(msg)
+    debug_container.empty()
+    debug_container.markdown("### Debug Log")
+    for m in st.session_state.debug_log_messages:
+        debug_container.markdown(f"- {m}")
 
 async def main():
     """Render loop for streamlit"""
@@ -162,6 +169,12 @@ async def main():
                 await asyncio.sleep(1)
                 subprocess.run("./start_all.sh", shell=True)  # noqa: ASYNC221
 
+    # Initialize the global debug container in the sidebar.
+    global debug_container
+    debug_container = st.sidebar.container()
+    if "debug_log_messages" not in st.session_state:
+        st.session_state.debug_log_messages = []
+
     if not st.session_state.auth_validated:
         if auth_error := validate_auth(
             st.session_state.provider, st.session_state.api_key
@@ -175,9 +188,6 @@ async def main():
     new_message = st.chat_input(
         "Type a message to send to Claude to control the computer (plain text or JSON list of messages)..."
     )
-
-    # Initialize debug_log in a place that is always available.
-    debug_log = st.sidebar.empty()
 
     with chat:
         # render past chats
@@ -204,6 +214,7 @@ async def main():
 
         # handle new message input: try parsing as JSON first
         if new_message:
+            log_debug(f"Debug: new_message: {new_message}")
             try:
                 parsed = json.loads(new_message)
                 # If the parsed data is a dict, wrap it in a list.
@@ -252,10 +263,13 @@ async def main():
 
         try:
             most_recent_message = st.session_state["messages"][-1]
+            log_debug(f"Debug: most recent message: {most_recent_message}")
         except IndexError:
+            log_debug("Debug: no messages in session state")
             return
 
         if most_recent_message["role"] != Sender.USER:
+            log_debug(f"Debug: most recent message is not a user message: {most_recent_message}")
             return
 
         with track_sampling_loop():
@@ -437,6 +451,7 @@ def _render_message(
         return
     with st.chat_message(sender):
         if is_tool_result:
+            log_debug(f"Debug: tool result message: {message}")
             message = cast(ToolResult, message)
             if message.output:
                 if message.__class__.__name__ == "CLIResult":

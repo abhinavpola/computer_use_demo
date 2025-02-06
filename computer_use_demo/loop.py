@@ -112,11 +112,11 @@ async def sampling_loop(
 
         if enable_prompt_caching:
             betas.append(PROMPT_CACHING_BETA_FLAG)
-            _inject_prompt_caching(messages)
+            # _inject_prompt_caching(messages)
             # Because cached reads are 10% of the price, we don't think it's
             # ever sensible to break the cache by truncating images
             only_n_most_recent_images = 0
-            system["cache_control"] = {"type": "ephemeral"}
+            # system["cache_control"] = {"type": "ephemeral"}
 
         if only_n_most_recent_images:
             _maybe_filter_to_n_most_recent_images(
